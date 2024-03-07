@@ -1,0 +1,199 @@
+---
+title: "project_code"
+author: "Jie Zheng, Zhudong Qiu, Yingyi Huang"
+date: "4/30/2023"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+library(dplyr)
+library(GGally)
+```
+
+```{r}
+# import data
+covid = read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/COVID%20-%20State%20-%20Daily.csv")
+emplo = read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/Employment%20-%20State%20-%20Weekly.csv")
+mobility = read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/Google%20Mobility%20-%20State%20-%20Daily.csv")
+job = read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/Job%20Postings%20-%20State%20-%20Weekly.csv")
+policy = read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/Policy%20Milestones%20-%20State.csv")
+UI_claim= read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/UI%20Claims%20-%20State%20-%20Weekly.csv")
+womply = read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/Womply%20-%20State%20-%20Weekly.csv")
+ID = read.csv("https://raw.githubusercontent.com/OpportunityInsights/EconomicTracker/main/data/GeoIDs%20-%20State.csv")
+```
+
+```{r, warning= FALSE}
+# set up the datafram
+state_df2 <- function(statefip) {
+  df_covid <- covid %>% filter(statefips %in% c(statefip)) %>% 
+    within( Date <- sprintf("%d-%02d", year, month))%>% 
+    filter(Date >= "2020-04") %>% 
+    select( Date,statefips,death_rate) %>% 
+    na.omit() %>% 
+    mutate(death_rate = as.numeric(death_rate)) %>% 
+    group_by(Date) %>% 
+    summarize(death_rate = median(death_rate,na.rm = T),
+              state = mean(statefips))
+    
+
+  df_emplo <- emplo %>% filter(statefips %in% c(statefip))%>%
+    within( Date <- sprintf("%d-%02d", year, month)) %>%
+    filter(Date >= "2020-04") %>%
+    select( Date,statefips,emp) %>%
+    na.omit() %>%
+    mutate(emp = as.numeric(emp)) %>% 
+    group_by(Date) %>%
+    summarize(emp = mean(emp,na.rm = T),
+              state = mean(statefips))
+
+  df_mobility <- mobility %>% filter(statefips %in% c(statefip))%>%
+    within( Date <- sprintf("%d-%02d", year, month)) %>%
+    filter(Date >= "2020-04") %>%
+    select( Date,statefips, gps_residential, gps_transit_stations) %>%
+    na.omit() %>% 
+    mutate(gps_residential = as.numeric(gps_residential)) %>%
+    mutate(gps_transit_stations = as.numeric(gps_transit_stations)) %>% 
+    group_by(Date) %>%
+    summarize(res = mean(gps_residential, na.rm = T),
+              ts = mean(gps_transit_stations,na.rm = T),
+              state = mean(statefips))
+
+  df_UI_claim<- UI_claim %>% filter(statefips %in% c(statefip))%>%
+    within( Date <- sprintf("%d-%02d", year, month)) %>%
+    filter((Date >= "2020-04")& (initclaims_rate_combined!='.')) %>%
+    select( Date,statefips,initclaims_rate_combined) %>%
+    na.omit() %>%
+    mutate(initclaims_rate_combined = as.numeric(initclaims_rate_combined)) %>% 
+    group_by(Date) %>%
+    summarise(init_claim_rate = mean(initclaims_rate_combined),
+          state = mean(statefips))
+
+  df_womply <- womply %>% filter(statefips %in% c(statefip))%>%
+    within( Date <- sprintf("%d-%02d", year, month)) %>%
+    filter(Date >= "2020-04") %>%
+    select( Date,statefips,revenue_retail) %>%
+    na.omit() %>% 
+    mutate(revenue_retail = as.numeric(revenue_retail)) %>%
+    
+    group_by(Date) %>%
+    summarise(rev_retail = mean(revenue_retail),
+              
+              state = mean(statefips))
+  
+  merge_df <- merge(merge(merge(merge(df_covid, df_emplo, by = "Date"),
+                                      df_mobility, by = "Date"), 
+                                df_womply, by = "Date"),
+                          df_UI_claim, by = "Date")
+  merge_df = select(merge_df, c(Date, death_rate,emp,res,ts,rev_retail,init_claim_rate))
+  merge_df$state = rep(statefip, length(merge_df$Date))
+  return(merge_df) 
+
+}
+for(i in sort(unique(covid$statefips))) {
+  if(i == 1) {
+    df1=state_df2(1)
+  } else{
+    df1 = rbind(df1, state_df2(i))
+  }
+}
+df1= na.omit(df1)
+popu = ID %>% arrange(desc(state_pop2019)) %>% 
+  head(10)
+
+# Here are the state FIPS codes for the ten states with the best healthcare resources in the US:
+# 
+# Massachusetts - 25
+# Minnesota - 27
+# Rhode Island - 44
+# Vermont - 50
+# Colorado - 08
+# Connecticut - 09
+# New Hampshire - 33
+# North Dakota - 38
+# Iowa - 19
+# Utah - 49
+df1  <- df1 %>% mutate(if_good_healthcare = state %in%c(25,27,44,50,8,9,33,38,19,49)) %>% 
+  mutate(if_large_population = state %in% popu$statefips)
+
+
+df1$log_y = log(df1$death_rate)
+```
+
+```{r}
+data <- select(df1, -c(state, Date))
+```
+
+```{r}
+data$log_icr <- log(data$init_claim_rate)
+```
+
+
+## Tool1 : Categorical variables / ANOVA
+```{r}
+full_model <- lm(log_y ~ emp+res+ts+rev_retail+if_good_healthcare+if_large_population+log_icr, data)
+summary(full_model)
+```
+
+```{r}
+anova(full_model)
+```
+
+From above outcome we see that the if_good_healthcare is not a correlative feature,
+so we remove this feature.
+
+```{r}
+model_no_healthcare <- lm(log_y ~ emp+res+ts+rev_retail+if_large_population+log_icr, data)
+summary(model_no_healthcare)
+```
+
+```{r}
+main_model <- lm(log_y ~ emp+res+ts+rev_retail+if_large_population+log_icr + emp*if_large_population, data)
+summary(main_model)
+anova(main_model, model_no_healthcare)
+AIC(main_model)
+```
+
+After we try many times anova with different choice of interaction, we find that
+this model will give us the best AIC.
+
+## Model selection
+```{r}
+# forward selection using AIC
+null_model <- lm(log_y ~ 1, data)
+step(null_model, scope = list(lower = null_model, upper = main_model),
+     direction = "forward", k = 2)
+```
+
+Now we can see that our main model is the best fit model.
+
+## Model diagnostics and Influential observations
+```{r}
+plot(main_model, which = 1)
+```
+
+It can be seen from the figure that the residuals are not randomly dispersed around
+the zero line. This indicates that the linearity assumption may not be fully valid.
+
+```{r}
+plot(main_model, which = 2)
+```
+
+The graph shows that the points are almost distributed roughly along the diagonal.
+This indicates that the normal distribution assumption hold.
+
+```{r}
+plot(main_model, which = 3)
+```
+
+The graph shows that there are some points not randomly scattered around the 
+horizontal line, which means that the homoscedasticity assumption may not
+be fully valid.
+
+```{r}
+plot(main_model, which = 5)
+```
+
+We can see that no points are beyond the Cook's distance. This means that there may have
+no high influential observations in our model.
